@@ -1,15 +1,19 @@
 <deployment-project plugin="plugin.apptool" plugin-version="1.0">
-  <configuration build-checksum="3543963669" file="/Users/gazda/Documents/CTU/Masters/Masters thesis/USV-App/USV App  Antonn Gazda.prj" location="/Users/gazda/Documents/CTU/Masters/Masters thesis/USV-App" name="USV App  Antonn Gazda" target="target.mlapps" target-name="Package App">
-    <param.appname>USV App  Antonn Gazda</param.appname>
+  <configuration build-checksum="2860105115" file="/Users/gazda/Documents/CTU/Masters/Masters thesis/USV-App/USV App  Antonin Gazda.prj" location="/Users/gazda/Documents/CTU/Masters/Masters thesis/USV-App" name="USV App  Antonin Gazda" target="target.mlapps" target-name="Package App">
+    <param.appname>USV App  Antonin Gazda</param.appname>
     <param.authnamewatermark>Antonín Gazda</param.authnamewatermark>
-    <param.email />
-    <param.company />
-    <param.icon />
-    <param.icons />
+    <param.email>antonin.gazda@gmail.com</param.email>
+    <param.company>CTU FEE</param.company>
+    <param.icon>${PROJECT_ROOT}/USV App  Antonin Gazda_resources/icon_24.png</param.icon>
+    <param.icons>
+      <file>${PROJECT_ROOT}/USV App  Antonin Gazda_resources/icon_48.png</file>
+      <file>${PROJECT_ROOT}/USV App  Antonin Gazda_resources/icon_24.png</file>
+      <file>${PROJECT_ROOT}/USV App  Antonin Gazda_resources/icon_16.png</file>
+    </param.icons>
     <param.summary />
     <param.description />
-    <param.screenshot>/private/var/folders/yb/r25cx4r12q97k_5cy5c1swvh0000gn/T/tp42387428_413d_4e22_bfcb_dce556112b6c.png</param.screenshot>
-    <param.version>1.1</param.version>
+    <param.screenshot>/private/var/folders/yb/r25cx4r12q97k_5cy5c1swvh0000gn/T/tp1d86f420_7046_4835_a4a8_d0a18d2c0a5a.png</param.screenshot>
+    <param.version>1.2</param.version>
     <param.products.name />
     <param.products.id />
     <param.products.version />
@@ -17,10 +21,6 @@
     <param.output>${PROJECT_ROOT}</param.output>
     <param.guid>189f7c8c-ea2a-44ee-b1d2-9122e16fe411</param.guid>
     <unset>
-      <param.email />
-      <param.company />
-      <param.icon />
-      <param.icons />
       <param.summary />
       <param.description />
       <param.products.name />
@@ -63,7 +63,7 @@
       <vista>false</vista>
       <linux>false</linux>
       <solaris>false</solaris>
-      <osver>14.0</osver>
+      <osver>15.3</osver>
       <os32>false</os32>
       <os64>true</os64>
       <arch>maci64</arch>
