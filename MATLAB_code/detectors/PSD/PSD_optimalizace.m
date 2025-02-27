@@ -6,7 +6,7 @@ fcutMax       = 120000;  % Maximum frequency cutoff (Hz)
 fs            = 250000;  % Sampling frequency (Hz)
 ROIstart      = 100;     % ROI start time (s)
 ROIlength     = 20;      % ROI length (s)
-runWholeSignal = false;  % Process only the ROI
+runWholeSignal = true;  % Process only the ROI
 
 %% Candidate PSD Parameters
 candidateSegmentLengths = [8192];  % Candidate segment lengths (FFT lengths)
@@ -18,8 +18,8 @@ candidateNoiseWindows = [200];  % Candidate noise window sizes (samples)
 
 %% Candidate Adaptive Threshold Parameters
 % Adaptive threshold = localMean(effectiveEnvelope) + k * localStd(effectiveEnvelope)
-candidateLocalWindows = [100,200];  % Candidate local window sizes (samples)
-candidateK            = [0.06,0.07,0.08,0.09];  % Candidate scaling factors
+candidateLocalWindows = [200];  % Candidate local window sizes (samples)
+candidateK            = [0.06];  % Candidate scaling factors
 
 %% File Paths
 basePath  = "/Users/gazda/Documents/CTU/Masters/Masters thesis/";
