@@ -17,13 +17,6 @@ plotDetection  = false;
 % Precision: 0.886
 % Recall: 0.525
 % F1-Score: 0.660
-% Optimal Parameters:
-% Segment Length: 8192 samples
-% Overlap Factor: 0.75
-% Moving Average Window: 4 samples
-% Adaptive Local Window: 300 samples
-% k Factor: 0.30
-% Best F1-Score: 0.660
 
 %% Candidate PSD Parameters
 candidateSegmentLengths = [8192, 16384]; % FFT lengths
