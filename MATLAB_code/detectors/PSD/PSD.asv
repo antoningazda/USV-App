@@ -1,0 +1,182 @@
+%% optimizeDetector_customPSD.m
+% This script optimizes the detection threshold for your ultrasonic
+% vocalization detector while using fixed PSD parameters that were working well:
+%
+%   - fcut: [20 kHz, 120 kHz]
+%   - Sampling frequency: 250000 Hz
+%   - Window length: 0.006*fs ≈ 1500 samples
+%   - Overlap: 50% (≈750 samples)
+%   - nfft: next power of 2 (≈2048)
+%
+% It uses your provided compareLabels.m to compare detected events with ground truth.
+% Detections closer than 10 ms are merged.
+
+clc; clear; close all;
+
+%% PSD and Detection Parameters
+fcutMin = 20000;        % Minimum frequency cutoff (Hz)
+fcutMax = 120000;       % Maximum frequency cutoff (Hz)
+fs = 250000;            % Sampling frequency (Hz)
+
+wlen = 0.006 * fs;      % Window length = 0.006*fs = 1500 samples
+overlap = round(wlen * 0.5); % 50% overlap, i.e., 750 samples
+nfft = 2^nextpow2(wlen); % FFT length (≈2048)
+
+% ROI settings (in seconds)
+ROIstart = 100;
+ROIlength = 0.6;
+
+% Thresholds to test (the analysis code used a threshold of 0.1)
+thresholds = 0.05:0.05:0.20;
+
+% Merge detections that are closer than 10 ms
+mergeThreshold = 0.01;  % seconds
+
+%% File Paths and Data Files
+basePath = "/Users/gazda/Documents/CTU/Masters/Masters thesis/";
+dataPath = fullfile(basePath, "data");
+audioDir = fullfile(dataPath, "usv_audio", "denoise");
+labelDir = fullfile(dataPath, "labels");
+
+% Using datasets with provided labels (here five files)
+audioFiles = { "LPS-SI2homo-mH02-I04-USV_denoise", ...
+               "LPS-SI2homo-mK01-L03-USV_denoise", ...
+               "LPS-SI2homo-mL01-USV_denoise", ...
+               "LPS-SI2homo-mO02-S03-USV_denoise", ...
+               "LPS-SI2homo-mR03-T01-USV_denoise" };
+
+labelFiles = { "LPS-SI2homo-mH02-I04-USV-IVojt", ...
+               "LPS-SI2homo-mK01-L03-USV-IVojt", ...
+               "LPS-SI2homo-mL01-USV-IVojt", ...
+               "LPS-SI2homo-mO02-S03-USV-IVojt", ...
+               "LPS-SI2homo-mR03-T01-USV-IVojt" };
+
+numFiles = length(labelFiles);
+
+%% Optimization Loop (Threshold Only)
+bestF1 = -Inf;
+bestThreshold = NaN;
+
+fprintf('Optimizing detection threshold with fixed PSD parameters:\n');
+fprintf('fcut: [%d %d] Hz, fs = %d Hz, window length = %.0f samples, overlap = %d samples, nfft = %d\n',...
+    fcutMin, fcutMax, fs, wlen, overlap, nfft);
+
+for th = thresholds
+    fprintf('Testing threshold = %.3f\n', th);
+    
+    % Initialize overall counts for this threshold
+    totalTP = 0;
+    totalFP = 0;
+    totalFN = 0;
+    
+    for i = 1:numFiles
+        % Construct file paths
+        audioPath = fullfile(audioDir, audioFiles{i} + ".wav");
+        providedLabelPath = fullfile(labelDir, labelFiles{i} + ".txt");
+        
+        % --- DETECTION ---
+        % Detect events using the fixed PSD parameters
+        detectedLabels = detectEvents_customPSD(audioPath, th, fcutMin, fcutMax, fs, wlen, overlap, nfft, ROIstart, ROIlength);
+        % Merge detections that are very close together
+        detectedLabels = mergeCloseDetections(detectedLabels, mergeThreshold);
+        
+        % Save detected labels to a temporary file (format required by importLabels)
+        tempDetectedFile = fullfile(tempdir, "detected_labels.txt");
+        saveDetectedLabels(detectedLabels, tempDetectedFile);
+        
+        % --- EVALUATION ---
+        % Compare detections with provided labels using the provided compareLabels function
+        stats = compareLabels(providedLabelPath, tempDetectedFile, fs);
+        
+        % Accumulate counts (using midpoint criterion)
+        totalTP = totalTP + stats.TruePositives;
+        totalFP = totalFP + stats.FalsePositives;
+        totalFN = totalFN + stats.FalseNegatives;
+    end
+    
+    % Compute overall precision, recall, and F1-score
+    precision = totalTP / (totalTP + totalFP + eps);
+    recall    = totalTP / (totalTP + totalFN + eps);
+    F1        = 2 * (precision * recall) / (precision + recall + eps);
+    
+    fprintf('Threshold = %.3f -> Precision = %.3f, Recall = %.3f, F1 = %.3f\n\n', th, precision, recall, F1);
+    
+    if F1 > bestF1
+        bestF1 = F1;
+        bestThreshold = th;
+    end
+end
+
+fprintf('Best threshold: %.3f with F1 = %.3f\n', bestThreshold, bestF1);
+
+%% Helper Functions
+
+function detectedLabels = detectEvents_customPSD(audioPath, threshold, fcutMin, fcutMax, fs, wlen, overlap, nfft, ROIstart, ROIlength)
+    % Load audio; if needed, resample to the desired fs.
+    [x, fs_audio] = audioread(audioPath);
+    if fs_audio ~= fs
+        x = resample(x, fs, fs_audio);
+    end
+    % Remove DC offset and normalize
+    x = x - mean(x);
+    x = x / max(abs(x));
+    
+    % Extract ROI from the signal
+    startIdx = round(ROIstart * fs) + 1;
+    endIdx = round((ROIstart + ROIlength) * fs);
+    xROI = x(startIdx:endIdx);
+    
+    % Compute spectrogram using the fixed PSD parameters
+    window = hamming(wlen);
+    [S, F, T] = spectrogram(xROI, window, overlap, nfft, fs, 'yaxis');
+    
+    % Restrict analysis to the frequency band of interest
+    freqMask = (F >= fcutMin) & (F <= fcutMax);
+    powerEnvelope = sum(abs(S(freqMask, :)).^2, 1);
+    powerEnvelope = powerEnvelope / max(powerEnvelope);  % Normalize
+    
+    % Binary detection based on the threshold
+    binaryDetections = powerEnvelope > threshold;
+    edges = diff([0, binaryDetections, 0]);
+    eventStarts = find(edges == 1);
+    eventEnds   = find(edges == -1) - 1;
+    
+    % Convert time indices (from T) to seconds (adding ROIstart)
+    eventTimesStart = T(eventStarts) + ROIstart;
+    eventTimesEnd   = T(eventEnds)   + ROIstart;
+    
+    % Build struct array of detected events
+    nEvents = length(eventTimesStart);
+    detectedLabels = struct('StartTime', cell(nEvents,1), 'EndTime', cell(nEvents,1));
+    for j = 1:nEvents
+        detectedLabels(j).StartTime = eventTimesStart(j);
+        detectedLabels(j).EndTime   = eventTimesEnd(j);
+    end
+end
+
+function mergedLabels = mergeCloseDetections(labels, mergeThreshold)
+    % Merge detections if the gap between consecutive events is less than mergeThreshold.
+    if isempty(labels)
+        mergedLabels = labels;
+        return;
+    end
+    mergedLabels = labels(1);
+    for i = 2:length(labels)
+        gap = labels(i).StartTime - mergedLabels(end).EndTime;
+        if gap < mergeThreshold
+            mergedLabels(end).EndTime = max(mergedLabels(end).EndTime, labels(i).EndTime);
+        else
+            mergedLabels(end+1) = labels(i); %#ok<AGROW>
+        end
+    end
+end
+
+function saveDetectedLabels(labels, filePath)
+    % Save detected labels to a text file in the format expected by importLabels.
+    fid = fopen(filePath, 'w');
+    for i = 1:length(labels)
+        fprintf(fid, '%.6f\t%.6f\tdetected\n', labels(i).StartTime, labels(i).EndTime);
+        fprintf(fid, '0\t0\t\n');
+    end
+    fclose(fid);
+end

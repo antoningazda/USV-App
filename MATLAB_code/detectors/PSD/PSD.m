@@ -1,14 +1,18 @@
 clc; close all; clear;
 
 %% PARAMETERS
+analyzeWholeSignal = false;  % Set to true to analyze the entire signal
+
 fcutMin = 40000;        % Minimum frequency cutoff (Hz)
 fcutMax = 120000;       % Maximum frequency cutoff (Hz)
-threshold = 0.05;        % Threshold for detection
+threshold = 0.03;       % Threshold for detection
 segmentLength = 4096;   % Segment length for Welch PSD
 overlapFactor = 0.5;    % Overlap factor for Welch PSD
 fs = 250000;            % Sampling frequency (Hz)
-ROIstart = 100;         % Start time of Region of Interest (ROI) in seconds
-ROIlength = 20;         % Length of ROI in seconds
+
+% ROI settings (used only if analyzeWholeSignal is false)
+ROIstart = 100;         % Start time of ROI (seconds)
+ROIlength = 20;         % Length of ROI (seconds)
 
 % Moving average window (in number of power envelope samples)
 maWindow = 2;           
@@ -27,18 +31,24 @@ t = (0:length(x)-1) / fs;      % Time vector
 x = x - mean(x);             % Remove DC offset
 x = x / max(abs(x));         % Normalize audio
 
-% Extract ROI from the full signal
-startIndex = round(ROIstart * fs) + 1;
-endIndex = round((ROIstart + ROIlength) * fs);
-xROI = x(startIndex:endIndex);
-tROI = t(startIndex:endIndex);
+%% SELECT SIGNAL SEGMENT: ROI or Whole Signal
+if analyzeWholeSignal
+    xROI = x;
+    tROI = t;
+    ROIstart = 0;            % Whole signal: time starts at 0
+    ROIlength = t(end);      % ROI length is full duration
+else
+    startIndex = round(ROIstart * fs) + 1;
+    endIndex = round((ROIstart + ROIlength) * fs);
+    xROI = x(startIndex:endIndex);
+    tROI = t(startIndex:endIndex);
+end
 
 %% PSD ESTIMATION
-% Spectrogram parameters
-nfft = segmentLength;        % FFT length (equal to segment length)
-window = hamming(segmentLength);  % Hamming window
+nfft = segmentLength;              % FFT length (equal to segment length)
+window = hamming(segmentLength);   % Hamming window
 
-% Compute spectrogram over ROI
+% Compute spectrogram over selected signal segment
 [S, F, T] = spectrogram(xROI, window, round(segmentLength * overlapFactor), nfft, fs);
 
 % Select frequencies of interest and calculate power envelope
@@ -50,15 +60,12 @@ powerEnvelope = powerEnvelope / max(powerEnvelope);  % Normalize
 powerEnvelope = smoothdata(powerEnvelope, 'movmean', maWindow);
 
 %% DETECTION
-% Binary detection by thresholding the smoothed power envelope
-binaryDetections = powerEnvelope > threshold;
+binaryDetections = powerEnvelope > threshold;  % Thresholding
+groupedDetections = diff([0, binaryDetections, 0]);  % Group sequential detections
+eventStarts = find(groupedDetections == 1);    % Detection start indices
+eventEnds = find(groupedDetections == -1) - 1;   % Detection end indices
 
-% Group sequential detections into events using the difference
-groupedDetections = diff([0, binaryDetections, 0]);
-eventStarts = find(groupedDetections == 1);    % Indices where events start
-eventEnds = find(groupedDetections == -1) - 1;   % Indices where events end
-
-% Convert spectrogram time indices to absolute time (add ROI offset)
+% Convert spectrogram time indices to absolute time. (For whole signal, ROIstart = 0)
 eventTimesStart = T(eventStarts) + ROIstart;
 eventTimesEnd   = T(eventEnds) + ROIstart;
 
@@ -71,39 +78,45 @@ for i = 1:nEvents
 end
 
 %% STATISTICAL ANALYSIS
-% Save detected labels to a temporary file in the expected format
+% Save detected labels to a temporary file (format expected by importLabels)
 tempDetectedFile = fullfile(tempdir, "detected_labels.txt");
 saveDetectedLabels(detectedLabels, tempDetectedFile);
 
-% Load provided (ground truth) labels and filter them to the ROI.
+% Load provided (ground truth) labels.
 providedLabelsFull = importLabels(labelPath, fs);
-ROIend = ROIstart + ROIlength;
-providedLabelsROI = providedLabelsFull(arrayfun(@(x) (x.StartTime >= ROIstart && x.EndTime <= ROIend), providedLabelsFull));
 
-% Save the ROI-filtered provided labels to a temporary file.
+% If analyzing the whole signal, use all provided labels; otherwise filter to ROI.
+if analyzeWholeSignal
+    providedLabelsROI = providedLabelsFull;
+else
+    ROIend = ROIstart + ROIlength;
+    providedLabelsROI = providedLabelsFull(arrayfun(@(x) (x.StartTime >= ROIstart && x.EndTime <= ROIend), providedLabelsFull));
+end
+
+% Save the (filtered) provided labels to a temporary file.
 tempProvidedFile = fullfile(tempdir, "provided_labels_ROI.txt");
 saveDetectedLabels(providedLabelsROI, tempProvidedFile);
 
-% Compare detected labels with the provided ROI labels using compareLabels.
+% Compare detected labels with provided labels using compareLabels.
 stats = compareLabels(tempProvidedFile, tempDetectedFile, fs);
 
 % Display statistical results.
-fprintf("Statistical Analysis (Midpoint Criterion):\n");
-fprintf("True Positives: %d\n", stats.TruePositives);
-fprintf("False Positives: %d\n", stats.FalsePositives);
-fprintf("False Negatives: %d\n", stats.FalseNegatives);
-fprintf("Precision: %.3f\n", stats.Precision);
-fprintf("Recall: %.3f\n", stats.Recall);
-fprintf("F1-Score: %.3f\n", stats.F1Score);
+% fprintf("Statistical Analysis (Midpoint Criterion):\n");
+% fprintf("True Positives: %d\n", stats.TruePositives);
+% fprintf("False Positives: %d\n", stats.FalsePositives);
+% fprintf("False Negatives: %d\n", stats.FalseNegatives);
+% fprintf("Precision: %.3f\n", stats.Precision);
+% fprintf("Recall: %.3f\n", stats.Recall);
+% fprintf("F1-Score: %.3f\n", stats.F1Score);
 
 %% PLOTTING
 figure;
 tiledlayout(4, 1);
 
-% Plot raw ROI signal
+% Plot raw signal (ROI or whole)
 nexttile;
 plot(tROI, xROI);
-title("ROI Signal");
+title("Signal");
 xlabel("Time (s)");
 ylabel("Amplitude");
 axis tight;
@@ -119,10 +132,10 @@ title("Spectrogram");
 xlabel("Time (s)");
 ylabel("Frequency (kHz)");
 
-% Plot time-varying smoothed power envelope
+% Plot smoothed power envelope
 nexttile;
 plot(T + ROIstart, powerEnvelope, 'LineWidth', 1.5);
-title("Smoothed Time-Varying Power within ROI");
+title("Smoothed Time-Varying Power");
 xlabel("Time (s)");
 ylabel("Normalized Power");
 axis tight;
@@ -141,10 +154,10 @@ ylabel("Detection (1/0)");
 axis tight;
 
 %% OUTPUT
-fprintf("Detection complete. Total events detected: %d\n", nEvents);
-for i = 1:nEvents
-    fprintf("Event %d: Start Time = %.3f s, End Time = %.3f s\n", i, detectedLabels(i).StartTime, detectedLabels(i).EndTime);
-end
+% fprintf("Detection complete. Total events detected: %d\n", nEvents);
+% for i = 1:nEvents
+%     fprintf("Event %d: Start Time = %.3f s, End Time = %.3f s\n", i, detectedLabels(i).StartTime, detectedLabels(i).EndTime);
+% end
 
 % Save detection results to output file.
 fileID = fopen(outputPath, 'w');
