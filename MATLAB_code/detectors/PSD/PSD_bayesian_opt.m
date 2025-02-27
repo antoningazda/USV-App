@@ -5,31 +5,37 @@ fcutMin       = 40000;   % Minimum frequency cutoff (Hz)
 fcutMax       = 120000;  % Maximum frequency cutoff (Hz)
 fs            = 250000;  % Sampling frequency (Hz)
 ROIstart      = 100;     % ROI start time (s)
-ROIlength     = 20;      % ROI length (s)
-runWholeSignal = false;  % Process only the ROI
+ROIlength     = 60;      % ROI length (s)
+runWholeSignal = true;  % Process only the ROI
 
-%% Candidate PSD Parameters
-candidateSegmentLengths = [8192, 16384];  % Candidate segment lengths (FFT lengths)
-candidateOverlapFactors = [0.25, 0.4, 0.5, 0.6, 0.75];  % Candidate overlap fractions
-candidateMaWindows      = [1, 2, 3, 4, 5];   % Moving average window sizes (samples)
+% cely signal
+% 
+% Optimal Parameters Found:
+% Segment Length: 14502 samples
+% Overlap Factor: 0.57
+% Moving Average Window: 3 samples
+% Noise Window: 242 samples
+% Adaptive Local Window: 192 samples
+% k Factor: 0.020
+% w Factor: 0.995
+% Best F1-Score: 0.621
+% Statistics based on Midpoint Criterion:
+%     TotalProvidedLabels: 1451
+%     TotalDetectedLabels: 1479
+%           TruePositives: 910
+%          FalsePositives: 569
+%          FalseNegatives: 541
+%               Precision: 0.6153
+%                  Recall: 0.6272
+%                 F1Score: 0.6212
 
-%% Candidate Noise Floor Parameters
-candidateNoiseWindows = [150, 200, 250];  % Candidate noise window sizes (samples)
 
-%% Candidate Adaptive Threshold Parameters
-% Adaptive threshold = localMean(effectiveEnvelope) + k * localStd(effectiveEnvelope)
-candidateLocalWindows = [25, 50, 75, 100];  % Candidate local window sizes (samples)
-candidateK            = [0.01, 0.05, 0.1, 0.2];  % Candidate scaling factors
-
-%% File Paths
+%% Load Audio and Extract ROI
 basePath  = "/Users/gazda/Documents/CTU/Masters/Masters thesis/";
 datapath  = fullfile(basePath, "data");
 audioFile = "LPS-SI2homo-mH02-I04-USV";
 audioPath = fullfile(datapath, "usv_audio", audioFile + ".wav");
-labelPath = fullfile(datapath, "labels", audioFile + "-IVojt.txt");
-outputPath = fullfile(datapath, audioFile + "_detected.txt");
 
-%% LOAD AUDIO
 [x, fs_audio] = audioread(audioPath);
 if fs_audio ~= fs
     x = resample(x, fs, fs_audio);
@@ -38,7 +44,6 @@ t = (0:length(x)-1) / fs;
 x = x - mean(x);
 x = x / max(abs(x));
 
-%% SELECT SIGNAL PORTION: ROI
 if runWholeSignal
     xROI = x;
     tROI = t;
@@ -46,35 +51,50 @@ if runWholeSignal
     ROIlength = t(end);
 else
     startIndex = round(ROIstart * fs) + 1;
-    endIndex = round((ROIstart + ROIlength) * fs);
+    endIndex   = round((ROIstart + ROIlength) * fs);
     xROI = x(startIndex:endIndex);
     tROI = t(startIndex:endIndex);
 end
 
-%% LOAD PROVIDED LABELS (GROUND TRUTH) AND FILTER TO ROI
+%% Load Provided (Ground Truth) Labels and Save ROI-Filtered Version
+audioFile = "LPS-SI2homo-mH02-I04-USV";
+labelPath = fullfile(datapath, "labels", audioFile + "-IVojt.txt");
 providedLabelsFull = importLabels(labelPath, fs);
-ROIend = ROIstart + ROIlength;
-providedLabelsROI = providedLabelsFull(arrayfun(@(x) (x.StartTime >= ROIstart && x.EndTime <= ROIend), providedLabelsFull));
+if runWholeSignal
+    providedLabelsROI = providedLabelsFull;
+else
+    ROIend = ROIstart + ROIlength;
+    providedLabelsROI = providedLabelsFull(arrayfun(@(x) (x.StartTime >= ROIstart && x.EndTime <= ROIend), providedLabelsFull));
+end
 tempProvidedFile = fullfile(tempdir, "provided_labels_ROI.txt");
 saveDetectedLabels(providedLabelsROI, tempProvidedFile);
 
 %% Define Optimization Variables for Bayesian Optimization
+% We optimize:
+% - segLen: PSD segment length (integer)
+% - overlap: Overlap factor (continuous)
+% - maW: Moving average window for smoothing (integer)
+% - noiseW: Noise window for noise floor estimation (integer)
+% - localW: Window for adaptive threshold local statistics (integer)
+% - k: Scaling factor for adaptive threshold (continuous)
+% - w: Weight for local SNR in the adaptive threshold (continuous)
 vars = [...
     optimizableVariable('segLen', [8192, 16384], 'Type', 'integer'),...
     optimizableVariable('overlap', [0.25, 0.75]),...
     optimizableVariable('maW', [1, 5], 'Type', 'integer'),...
     optimizableVariable('noiseW', [150, 250], 'Type', 'integer'),...
-    optimizableVariable('localW', [25, 100], 'Type', 'integer'),...
-    optimizableVariable('k', [0.01, 0.2])];
+    optimizableVariable('localW', [25, 200], 'Type', 'integer'),...
+    optimizableVariable('k', [0.01, 0.2]),...
+    optimizableVariable('w', [0, 1])];
 
 %% Run Bayesian Optimization
-% Pass the extra variable tempProvidedFile to the objective function
+% Pass required extra variables to the objective function.
 objFun = @(optVars) detectorObjective(optVars, xROI, fs, ROIstart, fcutMin, fcutMax, tempProvidedFile);
 results = bayesopt(objFun, vars, ...
     'MaxObjectiveEvaluations', 30, 'AcquisitionFunctionName', 'expected-improvement-plus', 'Verbose', 1);
 
 bestParams = bestPoint(results);
-bestF1 = -results.MinObjective;  % Because our objective returns -F1
+bestF1 = -results.MinObjective;  % Because the objective returns -F1
 
 fprintf('\nOptimal Parameters Found:\n');
 fprintf('Segment Length: %d samples\n', bestParams.segLen);
@@ -83,6 +103,7 @@ fprintf('Moving Average Window: %d samples\n', bestParams.maW);
 fprintf('Noise Window: %d samples\n', bestParams.noiseW);
 fprintf('Adaptive Local Window: %d samples\n', bestParams.localW);
 fprintf('k Factor: %.3f\n', bestParams.k);
+fprintf('w Factor: %.3f\n', bestParams.w);
 fprintf('Best F1-Score: %.3f\n', bestF1);
 
 %% Final Detection Using Best Parameters (on ROI)
@@ -93,15 +114,22 @@ powerEnvelope = sum(abs(S(freqMask, :)).^2, 1);
 powerEnvelope = powerEnvelope / max(powerEnvelope);
 powerEnvelope = smoothdata(powerEnvelope, 'movmean', bestParams.maW);
 
-noiseFloor = movmin(powerEnvelope, bestParams.noiseW);
+% Adaptive Noise Tracking using Median Filtering for Noise Floor Estimation
+noiseFloor = movmedian(powerEnvelope, bestParams.noiseW);
 effectiveEnvelope = powerEnvelope - noiseFloor;
 effectiveEnvelope(effectiveEnvelope < 0) = 0;
 
+% Local SNR (clip to avoid extreme values)
+localSNR = effectiveEnvelope ./ (noiseFloor + eps);
+localSNR = min(localSNR, 10);
+
+% Adaptive thresholding: use the new formula incorporating local SNR:
+% adaptiveThreshold = (localMean + k*localStd) ./ (1 + w*localSNR)
 localMean = movmean(effectiveEnvelope, bestParams.localW);
 localStd  = movstd(effectiveEnvelope, bestParams.localW);
-optimalThreshold = localMean + bestParams.k * localStd;
+adaptiveThreshold = (localMean + bestParams.k * localStd) ./ (1 + bestParams.w * localSNR);
 
-binaryDetections = effectiveEnvelope > optimalThreshold;
+binaryDetections = effectiveEnvelope > adaptiveThreshold;
 groupedDetections = diff([0, binaryDetections, 0]);
 eventStarts = find(groupedDetections == 1);
 eventEnds = find(groupedDetections == -1) - 1;
@@ -118,7 +146,7 @@ tempDetectedFile = fullfile(tempdir, "detected_labels.txt");
 saveDetectedLabels(detectedLabels, tempDetectedFile);
 finalStats = compareLabels(tempProvidedFile, tempDetectedFile, fs);
 
-fprintf('\nFinal Detection Performance with Optimal Parameters & Noise Tracking:\n');
+fprintf('\nFinal Detection Performance with Optimal Parameters & Enhanced Noise Tracking:\n');
 fprintf('True Positives: %d\n', finalStats.TruePositives);
 fprintf('False Positives: %d\n', finalStats.FalsePositives);
 fprintf('False Negatives: %d\n', finalStats.FalseNegatives);
@@ -126,7 +154,7 @@ fprintf('Precision: %.3f\n', finalStats.Precision);
 fprintf('Recall: %.3f\n', finalStats.Recall);
 fprintf('F1-Score: %.3f\n', finalStats.F1Score);
 
-%% OUTPUT: Save final detection results to file.
+%% OUTPUT: Save Final Detection Results to File
 outputPath = fullfile(datapath, audioFile + "_detected.txt");
 fprintf("\nDetection complete. Total events detected: %d\n", nEvents);
 for i = 1:nEvents
@@ -160,6 +188,7 @@ function objective = detectorObjective(optVars, xROI, fs, ROIstart, fcutMin, fcu
     noiseW = optVars.noiseW;
     localW = optVars.localW;
     kVal = optVars.k;
+    wVal = optVars.w;
     
     % Compute spectrogram using current PSD parameters
     currentWindow = hamming(segLen);
@@ -169,15 +198,19 @@ function objective = detectorObjective(optVars, xROI, fs, ROIstart, fcutMin, fcu
     powerEnvelope = powerEnvelope / max(powerEnvelope);
     powerEnvelope = smoothdata(powerEnvelope, 'movmean', maW);
     
-    % Noise tracking: estimate noise floor
-    noiseFloor = movmin(powerEnvelope, noiseW);
+    % Noise tracking: Use moving median for adaptive noise estimation
+    noiseFloor = movmedian(powerEnvelope, noiseW);
     effectiveEnvelope = powerEnvelope - noiseFloor;
     effectiveEnvelope(effectiveEnvelope < 0) = 0;
     
-    % Adaptive thresholding
+    % Compute local SNR (clipping extreme values)
+    localSNR = effectiveEnvelope ./ (noiseFloor + eps);
+    localSNR = min(localSNR, 10);
+    
+    % Adaptive thresholding incorporating local SNR:
     localMean = movmean(effectiveEnvelope, localW);
     localStd  = movstd(effectiveEnvelope, localW);
-    adaptiveThreshold = localMean + kVal * localStd;
+    adaptiveThreshold = (localMean + kVal * localStd) ./ (1 + wVal * localSNR);
     
     % Binary detection
     binaryDetections = effectiveEnvelope > adaptiveThreshold;
@@ -200,6 +233,6 @@ function objective = detectorObjective(optVars, xROI, fs, ROIstart, fcutMin, fcu
     stats = compareLabels(tempProvidedFile, tempDetectedFile, fs);
     F1 = stats.F1Score;
     
-    % Return negative F1 as objective (minimization)
+    % Return negative F1 as objective (for minimization)
     objective = -F1;
 end
