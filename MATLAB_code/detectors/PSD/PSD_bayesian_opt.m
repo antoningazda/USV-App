@@ -5,7 +5,7 @@ fcutMin       = 40000;   % Minimum frequency cutoff (Hz)
 fcutMax       = 120000;  % Maximum frequency cutoff (Hz)
 fs            = 250000;  % Sampling frequency (Hz)
 ROIstart      = 100;     % ROI start time (s)
-ROIlength     = 60;      % ROI length (s)
+ROIlength     = 10;      % ROI length (s)
 runWholeSignal = false;  % Process only the ROI
 
 % cely signal
