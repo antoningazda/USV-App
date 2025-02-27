@@ -6,7 +6,7 @@ fcutMax       = 120000;  % Maximum frequency cutoff (Hz)
 fs            = 250000;  % Sampling frequency (Hz)
 ROIstart      = 100;     % ROI start time (s)
 ROIlength     = 60;      % ROI length (s)
-runWholeSignal = true;  % Process only the ROI
+runWholeSignal = false;  % Process only the ROI
 
 % cely signal
 % 
@@ -34,7 +34,7 @@ runWholeSignal = true;  % Process only the ROI
 basePath  = "/Users/gazda/Documents/CTU/Masters/Masters thesis/";
 datapath  = fullfile(basePath, "data");
 audioFile = "LPS-SI2homo-mH02-I04-USV";
-audioPath = fullfile(datapath, "usv_audio", audioFile + ".wav");
+audioPath = fullfile(datapath, "usv_audio/denoise", audioFile +"_denoise" + ".wav");
 
 [x, fs_audio] = audioread(audioPath);
 if fs_audio ~= fs

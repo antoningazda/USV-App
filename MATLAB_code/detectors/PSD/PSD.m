@@ -4,26 +4,33 @@ clc; close all; clear;
 fcutMin       = 40000;    % Minimum frequency cutoff (Hz)
 fcutMax       = 120000;   % Maximum frequency cutoff (Hz)
 fs            = 250000;   % Sampling frequency (Hz)
-ROIstart      = 10;       % ROI start time (s)
-ROIlength     = 600;      % ROI length (s)
+ROIstart      = 60;       % ROI start time (s)
+ROIlength     = 10;      % ROI length (s)
 runWholeSignal = true;    % Set true to process the whole signal
 
+% Boolean flag to control plotting
+plotDetection = false;
+
+
+
+
+
 % Best PSD parameters
-segmentLength = 14502;    % Optimal segment length for Welch PSD
-overlapFactor = 0.57;     % Optimal overlap factor (fraction)
-maWindow      = 1;        % Optimal moving average window for smoothing
+segmentLength = 13331;    % Optimal segment length for Welch PSD
+overlapFactor = 0.74;     % Optimal overlap factor (fraction)
+maWindow      = 3;        % Optimal moving average window for smoothing
 
 % Best Noise Tracking & Adaptive Threshold Parameters
-noiseWindow   = 242;      % Optimal noise window (samples) for noise floor estimation
-localWindow   = 192;      % Optimal adaptive local window (samples) for computing local mean/std
-k             = 0.020;    % Optimal scaling factor for adaptive threshold
-w             = 0.995;    % Optimal weight for local SNR in adaptive thresholding
+noiseWindow   = 220;      % Optimal noise window (samples) for noise floor estimation
+localWindow   = 195;      % Optimal adaptive local window (samples) for computing local mean/std
+k             = 0.011;    % Optimal scaling factor for adaptive threshold
+w             = 0.967;    % Optimal weight for local SNR in adaptive thresholding
 
 %% File Paths
 basePath  = "/Users/gazda/Documents/CTU/Masters/Masters thesis/";
 datapath  = fullfile(basePath, "data");
-audioFile = "LPS-SI2homo-mH02-I04-USV";
-audioPath = fullfile(datapath, "usv_audio", strcat(audioFile, ".wav"));
+audioFile = "LPS-SI2homo-mK01-L03-USV";
+audioPath = fullfile(datapath, "usv_audio/denoise", strcat(audioFile, "_denoise",".wav"));
 labelPath = fullfile(datapath, "labels", strcat(audioFile, "-IVojt.txt"));
 outputPath = fullfile(datapath, strcat(audioFile, "_detected.txt"));
 
@@ -36,7 +43,7 @@ t = (0:length(x)-1) / fs;
 x = x - mean(x);
 x = x / max(abs(x));
 
-%% SELECT SIGNAL PORTION: ROI
+%% SELECT SIGNAL PORTION: ROI or Whole Signal
 if runWholeSignal
     xROI = x;
     tROI = t;
@@ -111,21 +118,64 @@ fprintf("Precision: %.3f\n", stats.Precision);
 fprintf("Recall: %.3f\n", stats.Recall);
 fprintf("F1-Score: %.3f\n", stats.F1Score);
 
-%% OUTPUT
-% fprintf("Detection complete. Total events detected: %d\n", nEvents);
-% for i = 1:nEvents
-%     fprintf("Event %d: Start Time = %.3f s, End Time = %.3f s\n", i, detectedLabels(i).StartTime, detectedLabels(i).EndTime);
-% end
-% 
-% fileID = fopen(outputPath, 'w');
-% fprintf(fileID, "Detection complete. Total events detected: %d\n", nEvents);
-% for i = 1:nEvents
-%     fprintf(fileID, "Event %d: Start Time = %.3f s, End Time = %.3f s\n", i, detectedLabels(i).StartTime, detectedLabels(i).EndTime);
-% end
-% fclose(fileID);
- fprintf("Detection results saved to: %s\n", outputPath);
+%% PLOTTING (if enabled)
+if plotDetection
+    figure;
+    tiledlayout(5,1);
+    
+    % Plot raw signal
+    nexttile;
+    plot(tROI, xROI);
+    if runWholeSignal
+        title("Full Signal");
+    else
+        title("ROI Signal");
+    end
+    xlabel("Time (s)"); ylabel("Amplitude");
+    grid on;
+    
+    % Plot spectrogram
+    nexttile;
+    imagesc(T_spec + ROIstart, F/1000, 10*log10(abs(S)));
+    axis xy; colormap jet; colorbar;
+    title("Spectrogram");
+    xlabel("Time (s)"); ylabel("Frequency (kHz)");
+    
+    % Plot smoothed power envelope and optimal adaptive threshold
+    nexttile;
+    plot(T_spec + ROIstart, powerEnvelope, 'LineWidth', 1.5);
+    hold on;
+    plot(T_spec + ROIstart, optimalThreshold, 'k--', 'LineWidth', 1.5);
+    hold off;
+    title("Smoothed Power Envelope & Adaptive Threshold");
+    xlabel("Time (s)"); ylabel("Normalized Power");
+    grid on;
+    
+    % Plot binary detection results
+    nexttile;
+    stem(T_spec + ROIstart, binaryDetections, 'r');
+    title("Binary Detections");
+    xlabel("Time (s)"); ylabel("Detection (1/0)");
+    grid on;
+    
+    % Plot detected events over raw signal
+    nexttile;
+    plot(tROI, xROI);
+    hold on;
+    for i = 1:nEvents
+        xline(detectedLabels(i).StartTime, 'b--', 'LineWidth', 1.5);
+        xline(detectedLabels(i).EndTime, 'g--', 'LineWidth', 1.5);
+    end
+    hold off;
+    title("Detected Events Over Signal");
+    xlabel("Time (s)"); ylabel("Amplitude");
+    grid on;
+end
 
-saveDetectedLabels(detectedLabels, outputPath);
+%% OUTPUT
+
+fprintf("Detection results saved to: %s\n", outputPath);
+saveDetectedLabels(detectedLabels,outputPath);
 
 %% HELPER FUNCTION: saveDetectedLabels
 function saveDetectedLabels(labels, filePath)
