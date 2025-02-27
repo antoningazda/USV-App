@@ -1,24 +1,39 @@
 clc; close all; clear;
 
-%% FIXED PARAMETERS (from previous optimization)
-fcutMin       = 40000;        % Minimum frequency cutoff (Hz)
-fcutMax       = 120000;       % Maximum frequency cutoff (Hz)
-segmentLength = 16384;        % Optimal segment length for Welch PSD
-overlapFactor = 0.60;         % Optimal overlap factor (fraction)
-maWindow      = 3;            % Optimal moving average window size (samples)
-fs            = 250000;       % Sampling frequency (Hz)
-ROIstart      = 100;          % Start time of Region of Interest (ROI) in seconds
-ROIlength     = 20;           % Length of ROI in seconds
+%% FIXED PARAMETERS (for candidate search)
+fcutMin       = 40000;   % Minimum frequency cutoff (Hz)
+fcutMax       = 120000;  % Maximum frequency cutoff (Hz)
+fs            = 250000;  % Sampling frequency (Hz)
+ROIstart      = 100;     % ROI start time (s)
+ROIlength     = 20;      % ROI length (s)
+runWholeSignal = false;   % Set true to process the entire signal
+plotDetection  = false;
 
-% Set to true to process the whole signal instead of the ROI
-runWholeSignal = false;
-plotDetection  = false;         % Set to true to see the final detection plots
+%
+% Final Detection Performance with Optimal Parameters:
+% True Positives: 31
+% False Positives: 4
+% False Negatives: 28
+% Precision: 0.886
+% Recall: 0.525
+% F1-Score: 0.660
+% Optimal Parameters:
+% Segment Length: 8192 samples
+% Overlap Factor: 0.75
+% Moving Average Window: 4 samples
+% Adaptive Local Window: 300 samples
+% k Factor: 0.30
+% Best F1-Score: 0.660
+
+%% Candidate PSD Parameters
+candidateSegmentLengths = [8192, 16384]; % FFT lengths
+candidateOverlapFactors = [0.6, 0.75];       % Overlap fractions
+candidateMaWindows      = [1, 2, 3, 4, 5];                    % Smoothing window for power envelope
 
 %% Candidate Adaptive Threshold Parameters
-% We'll optimize the parameters of the adaptive threshold:
-% adaptiveThreshold = localMean + k * localStd
-candidateLocalWindow = [100, 200, 300, 500];  % window sizes (in samples)
-candidateK           = [0.3, 0.4, 0.5, 0.6, 0.7];  % scaling factors
+% Adaptive threshold is computed as: localMean + k * localStd
+candidateLocalWindows = [25, 50, 75, 100, 200, 300, 400];  % Window sizes (in samples)
+candidateK           = [0.3, 0.4, 0.5, 0.6, 0.7];  % Scaling factors
 
 %% File Paths
 basePath  = "/Users/gazda/Documents/CTU/Masters/Masters thesis/";
@@ -34,37 +49,23 @@ if fs_audio ~= fs
     x = resample(x, fs, fs_audio);
 end
 t = (0:length(x)-1) / fs;
-x = x - mean(x);       % Remove DC offset
-x = x / max(abs(x));   % Normalize audio
+x = x - mean(x);
+x = x / max(abs(x));
 
 %% SELECT SIGNAL PORTION: ROI or Whole Signal
 if runWholeSignal
     xROI = x;
     tROI = t;
-    ROIstart = 0;               % Whole signal starts at 0
-    ROIlength = t(end);         % ROI length is the full duration
+    ROIstart = 0;               % Whole signal: start at 0
+    ROIlength = t(end);         % Full duration
 else
     startIndex = round(ROIstart * fs) + 1;
-    endIndex   = round((ROIstart + ROIlength) * fs);
+    endIndex = round((ROIstart + ROIlength) * fs);
     xROI = x(startIndex:endIndex);
     tROI = t(startIndex:endIndex);
 end
 
-%% PREPARE PSD ESTIMATION
-nfft = segmentLength;              % FFT length
-window = hamming(segmentLength);   % Hamming window
-
-% Compute spectrogram over selected portion
-[S, F, T_spec] = spectrogram(xROI, window, round(segmentLength * overlapFactor), nfft, fs);
-
-% Compute power envelope over the frequency band of interest
-freqMask = (F >= fcutMin) & (F <= fcutMax);
-powerEnvelope_orig = sum(abs(S(freqMask, :)).^2, 1);
-powerEnvelope_orig = powerEnvelope_orig / max(powerEnvelope_orig);  % Normalize
-% Apply fixed smoothing (maWindow)
-powerEnvelope_orig = smoothdata(powerEnvelope_orig, 'movmean', maWindow);
-
-%% Prepare Provided Labels (Ground Truth)
+%% Load Provided (Ground Truth) Labels and Filter to ROI if needed
 providedLabelsFull = importLabels(labelPath, fs);
 if runWholeSignal
     providedLabelsROI = providedLabelsFull;
@@ -72,81 +73,115 @@ else
     ROIend = ROIstart + ROIlength;
     providedLabelsROI = providedLabelsFull(arrayfun(@(x) (x.StartTime >= ROIstart && x.EndTime <= ROIend), providedLabelsFull));
 end
-% Save provided labels to a temporary file (for compareLabels)
+% Save provided labels to temporary file for evaluation.
 tempProvidedFile = fullfile(tempdir, "provided_labels_ROI.txt");
 saveDetectedLabels(providedLabelsROI, tempProvidedFile);
 
-%% OPTIMIZATION LOOP OVER ADAPTIVE THRESHOLD PARAMETERS
+%% OPTIMIZATION LOOP
 bestF1 = -Inf;
-bestParams = struct('localWindow', NaN, 'k', NaN);
-results = [];  % To store candidate parameters and F1 scores
+bestParams = struct('segmentLength',NaN, 'overlapFactor',NaN, 'maWindow',NaN, 'localWindow',NaN, 'k',NaN);
+results = [];  % To store each candidate combination and its F1 score
 
-fprintf('Optimizing adaptive threshold parameters...\n');
-for lw = candidateLocalWindow
-    % Compute local mean and std over the power envelope (using candidate window size)
-    localMean = movmean(powerEnvelope_orig, lw);
-    localStd  = movstd(powerEnvelope_orig, lw);
-    for currentK = candidateK
-        % Compute adaptive threshold
-        adaptiveThreshold = localMean + currentK * localStd;
-        
-        % Determine binary detections using adaptive threshold
-        binaryDetections = powerEnvelope_orig > adaptiveThreshold;
-        
-        % Group sequential detections into events
-        groupedDetections = diff([0, binaryDetections, 0]);
-        eventStarts = find(groupedDetections == 1);
-        eventEnds   = find(groupedDetections == -1) - 1;
-        
-        % Convert spectrogram time indices to absolute time (add ROIstart)
-        eventTimesStart = T_spec(eventStarts) + ROIstart;
-        eventTimesEnd   = T_spec(eventEnds) + ROIstart;
-        
-        % Build detectedLabels struct array
-        nEvents = length(eventTimesStart);
-        detectedLabels = struct('StartTime', cell(nEvents,1), 'EndTime', cell(nEvents,1));
-        for i = 1:nEvents
-            detectedLabels(i).StartTime = eventTimesStart(i);
-            detectedLabels(i).EndTime   = eventTimesEnd(i);
-        end
-        
-        % Save detected labels to temporary file for evaluation
-        tempDetectedFile = fullfile(tempdir, "detected_labels.txt");
-        saveDetectedLabels(detectedLabels, tempDetectedFile);
-        
-        % Evaluate detection performance using compareLabels
-        stats = compareLabels(tempProvidedFile, tempDetectedFile, fs);
-        F1 = stats.F1Score;
-        
-        % Store the current candidate parameters and F1 score
-        results = [results; lw, currentK, F1]; %#ok<AGROW>
-        fprintf('localWindow=%3d, k=%.2f --> F1=%.3f\n', lw, currentK, F1);
-        
-        % Update best parameters if F1 improves
-        if F1 > bestF1
-            bestF1 = F1;
-            bestParams.localWindow = lw;
-            bestParams.k = currentK;
+fprintf('Optimizing PSD and Adaptive Threshold Parameters...\n');
+for segLen = candidateSegmentLengths
+    % Prepare window for current segment length
+    currentWindow = hamming(segLen);
+    for ov = candidateOverlapFactors
+        for maW = candidateMaWindows
+            % Compute spectrogram with current PSD parameters
+            [S, F, T_spec] = spectrogram(xROI, currentWindow, round(segLen * ov), segLen, fs);
+            freqMask = (F >= fcutMin) & (F <= fcutMax);
+            powerEnvelope = sum(abs(S(freqMask, :)).^2, 1);
+            powerEnvelope = powerEnvelope / max(powerEnvelope);  % Global normalization
+            powerEnvelope = smoothdata(powerEnvelope, 'movmean', maW);  % Apply smoothing
+            
+            % Now loop over adaptive threshold parameters
+            for lw = candidateLocalWindows
+                localMean = movmean(powerEnvelope, lw);
+                localStd  = movstd(powerEnvelope, lw);
+                for currentK = candidateK
+                    % Compute adaptive threshold
+                    adaptiveThreshold = localMean + currentK * localStd;
+                    
+                    % Determine binary detections using adaptive threshold
+                    binaryDetections = powerEnvelope > adaptiveThreshold;
+                    
+                    % Group sequential detections into events
+                    groupedDetections = diff([0, binaryDetections, 0]);
+                    eventStarts = find(groupedDetections == 1);
+                    eventEnds   = find(groupedDetections == -1) - 1;
+                    
+                    % Convert spectrogram time indices to absolute time
+                    eventTimesStart = T_spec(eventStarts) + ROIstart;
+                    eventTimesEnd   = T_spec(eventEnds) + ROIstart;
+                    
+                    nEvents = length(eventTimesStart);
+                    detectedLabels = struct('StartTime', cell(nEvents,1), 'EndTime', cell(nEvents,1));
+                    for i = 1:nEvents
+                        detectedLabels(i).StartTime = eventTimesStart(i);
+                        detectedLabels(i).EndTime   = eventTimesEnd(i);
+                    end
+                    
+                    % Save detected labels to temporary file
+                    tempDetectedFile = fullfile(tempdir, "detected_labels.txt");
+                    saveDetectedLabels(detectedLabels, tempDetectedFile);
+                    
+                    % Evaluate using compareLabels
+                    stats = compareLabels(tempProvidedFile, tempDetectedFile, fs);
+                    F1 = stats.F1Score;
+                    
+                    % Store results and update best if improved
+                    results = [results; segLen, ov, maW, lw, currentK, F1]; %#ok<AGROW>
+                    fprintf('segLen=%5d, ov=%.2f, maW=%d, localWin=%3d, k=%.2f --> F1=%.3f\n',...
+                        segLen, ov, maW, lw, currentK, F1);
+                    
+                    if F1 > bestF1
+                        bestF1 = F1;
+                        bestParams.segmentLength = segLen;
+                        bestParams.overlapFactor = ov;
+                        bestParams.maWindow = maW;
+                        bestParams.localWindow = lw;
+                        bestParams.k = currentK;
+                    end
+                end
+            end
         end
     end
 end
 
-fprintf('\nOptimal Adaptive Threshold Parameters:\n');
-fprintf('Local Window: %d samples\n', bestParams.localWindow);
+fprintf('\nOptimal Parameters:\n');
+fprintf('Segment Length: %d samples\n', bestParams.segmentLength);
+fprintf('Overlap Factor: %.2f\n', bestParams.overlapFactor);
+fprintf('Moving Average Window: %d samples\n', bestParams.maWindow);
+fprintf('Adaptive Local Window: %d samples\n', bestParams.localWindow);
 fprintf('k Factor: %.2f\n', bestParams.k);
 fprintf('Best F1-Score: %.3f\n', bestF1);
 
-%% FINAL DETECTION USING OPTIMAL ADAPTIVE PARAMETERS
-% Recompute adaptive threshold with best parameters
-localMean = movmean(powerEnvelope_orig, bestParams.localWindow);
-localStd  = movstd(powerEnvelope_orig, bestParams.localWindow);
-optimalThreshold = localMean + bestParams.k * localStd;
-binaryDetections = powerEnvelope_orig > optimalThreshold;
+%% FINAL DETECTION USING BEST PARAMETERS
+% Recompute PSD using best PSD parameters
+bestSegLen = bestParams.segmentLength;
+bestOv = bestParams.overlapFactor;
+bestMaW = bestParams.maWindow;
+currentWindow = hamming(bestSegLen);
+[S, F, T_spec] = spectrogram(xROI, currentWindow, round(bestSegLen * bestOv), bestSegLen, fs);
+freqMask = (F >= fcutMin) & (F <= fcutMax);
+powerEnvelope = sum(abs(S(freqMask, :)).^2, 1);
+powerEnvelope = powerEnvelope / max(powerEnvelope);
+powerEnvelope = smoothdata(powerEnvelope, 'movmean', bestMaW);
+
+% Compute optimal adaptive threshold using best adaptive parameters
+bestLocalWindow = bestParams.localWindow;
+bestK = bestParams.k;
+localMean = movmean(powerEnvelope, bestLocalWindow);
+localStd  = movstd(powerEnvelope, bestLocalWindow);
+optimalThreshold = localMean + bestK * localStd;
+
+binaryDetections = powerEnvelope > optimalThreshold;
 groupedDetections = diff([0, binaryDetections, 0]);
 eventStarts = find(groupedDetections == 1);
 eventEnds = find(groupedDetections == -1) - 1;
 eventTimesStart = T_spec(eventStarts) + ROIstart;
-eventTimesEnd   = T_spec(eventEnds) + ROIstart;
+eventTimesEnd = T_spec(eventEnds) + ROIstart;
 nEvents = length(eventTimesStart);
 detectedLabels = struct('StartTime', cell(nEvents,1), 'EndTime', cell(nEvents,1));
 for i = 1:nEvents
@@ -154,19 +189,20 @@ for i = 1:nEvents
     detectedLabels(i).EndTime   = eventTimesEnd(i);
 end
 
-% Save final detected labels to output file
+% Save final detections and compute final statistics.
 tempDetectedFile = fullfile(tempdir, "detected_labels.txt");
 saveDetectedLabels(detectedLabels, tempDetectedFile);
-stats = compareLabels(tempProvidedFile, tempDetectedFile, fs);
-fprintf('\nFinal Detection Performance with Optimal Adaptive Parameters:\n');
-fprintf("True Positives: %d\n", stats.TruePositives);
-fprintf("False Positives: %d\n", stats.FalsePositives);
-fprintf("False Negatives: %d\n", stats.FalseNegatives);
-fprintf("Precision: %.3f\n", stats.Precision);
-fprintf("Recall: %.3f\n", stats.Recall);
-fprintf("F1-Score: %.3f\n", stats.F1Score);
+finalStats = compareLabels(tempProvidedFile, tempDetectedFile, fs);
 
-%% PLOTTING (Optional)
+fprintf('\nFinal Detection Performance with Optimal Parameters:\n');
+fprintf('True Positives: %d\n', finalStats.TruePositives);
+fprintf('False Positives: %d\n', finalStats.FalsePositives);
+fprintf('False Negatives: %d\n', finalStats.FalseNegatives);
+fprintf('Precision: %.3f\n', finalStats.Precision);
+fprintf('Recall: %.3f\n', finalStats.Recall);
+fprintf('F1-Score: %.3f\n', finalStats.F1Score);
+
+%% (Optional) PLOTTING
 if plotDetection
     figure;
     tiledlayout(5,1);
@@ -196,7 +232,7 @@ if plotDetection
     
     % Plot smoothed power envelope and optimal adaptive threshold
     nexttile;
-    plot(T_spec + ROIstart, powerEnvelope_orig, 'LineWidth', 1.5);
+    plot(T_spec + ROIstart, powerEnvelope, 'LineWidth', 1.5);
     hold on;
     plot(T_spec + ROIstart, optimalThreshold, 'k--', 'LineWidth', 1.5);
     hold off;
@@ -206,7 +242,7 @@ if plotDetection
     axis tight;
     grid on;
     
-    % Plot binary detection results
+    % Plot binary detections
     nexttile;
     stem(T_spec + ROIstart, binaryDetections, 'r');
     title("Binary Detections");
@@ -228,7 +264,7 @@ if plotDetection
     axis tight;
 end
 
-%% OUTPUT: Save Final Detection Results to File
+%% OUTPUT: Save final detection results to file.
 fprintf("\nDetection complete. Total events detected: %d\n", nEvents);
 for i = 1:nEvents
     fprintf("Event %d: Start Time = %.3f s, End Time = %.3f s\n", i, detectedLabels(i).StartTime, detectedLabels(i).EndTime);
