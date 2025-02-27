@@ -1,7 +1,7 @@
-%clc; close all; clear;
+clc; close all; clear;
 
-%id = 1;
-id = id+1;
+id = 1;
+%id = id+1;
 switch id
     case 1
         audioFile = "LPS-SI2homo-mH02-I04-USV";
@@ -83,7 +83,7 @@ else
     providedLabelsROI = providedLabelsFull(arrayfun(@(x) (x.StartTime >= ROIstart && x.EndTime <= ROIend), providedLabelsFull));
 end
 tempProvidedFile = fullfile(tempdir, "provided_labels_ROI.txt");
-saveDetectedLabels(providedLabelsROI, tempProvidedFile);
+exportLabels(providedLabelsROI, tempProvidedFile);
 
 %% PSD ESTIMATION
 nfft = segmentLength;
@@ -154,7 +154,7 @@ nEvents = length(detectedLabels);
 
 %% STATISTICAL ANALYSIS
 tempDetectedFile = fullfile(tempdir, "detected_labels.txt");
-saveDetectedLabels(detectedLabels, tempDetectedFile);
+exportLabels(detectedLabels, tempDetectedFile);
 stats = compareLabels(tempProvidedFile, tempDetectedFile, fs);
 
 % fprintf("Statistical Analysis (Midpoint Criterion):\n");
@@ -234,13 +234,4 @@ end
 % fprintf("Detection results saved to: %s\n", outputPath);
 
 
-saveDetectedLabels(detectedLabels,outputPath);
-%% HELPER FUNCTION: saveDetectedLabels
-function saveDetectedLabels(labels, filePath)
-    fid = fopen(filePath, 'w');
-    for i = 1:length(labels)
-        fprintf(fid, '%.6f\t%.6f\td\n', labels(i).StartTime, labels(i).EndTime);
-        fprintf(fid, '\\\t0.000000\t0.000000\n');
-    end
-    fclose(fid);
-end
+exportLabels(detectedLabels,outputPath);
