@@ -1,7 +1,7 @@
-clc; close all; clear;
+%clc; close all; clear;
 
 %% =============== SELECT AUDIO FILE ===============
-id = 1;
+id = id+1;
 switch id
     case 1
         audioFile = "LPS-SI2homo-mH02-I04-USV";
@@ -25,7 +25,7 @@ fcutMax       = 120000;   % Maximum frequency cutoff (Hz)
 fs            = 250000;   % Sampling frequency (Hz)
 ROIstart      = 50;       % ROI start time (s)
 ROIlength     = 20;       % ROI length (s)
-runWholeSignal = false;    % Process whole signal if true
+runWholeSignal = true;    % Process whole signal if true
 
 % Flag to control plotting
 plotDetection = false;  % set true to enable plotting
